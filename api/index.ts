@@ -52,6 +52,9 @@ io.on("connection", (socket) => {
     `[CONNECT] Peer ${socket.id.substring(0, 8)}... joined room ${roomId}. Users: ${rooms[roomId].size}/${MAX_PEERS_PER_ROOM}`
   );
 
+  // Notificar a todos en la sala el número de usuarios
+  io.to(roomId).emit("userCount", rooms[roomId].size);
+
   // Cuando un usuario registra su Peer ID
   socket.on("registerPeerId", (peerId: string) => {
     peerIds[socket.id] = peerId;
@@ -59,16 +62,21 @@ io.on("connection", (socket) => {
     
     // Informar a otros usuarios en la sala del nuevo Peer ID
     const otherPeersInRoom = Array.from(rooms[roomId]).filter(id => id !== socket.id);
-    otherPeersInRoom.forEach(otherId => {
-      const otherPeerId = peerIds[otherId];
-      if (otherPeerId) {
-        // Enviar al nuevo usuario el Peer ID del usuario existente
-        socket.emit("remotePeerId", otherPeerId);
-        // Enviar al usuario existente el Peer ID del nuevo usuario
-        io.to(otherId).emit("remotePeerId", peerId);
-        console.log(`[EXCHANGE] Exchanged Peer IDs between ${peerId.substring(0, 8)}... and ${otherPeerId.substring(0, 8)}...`);
-      }
-    });
+    
+    if (otherPeersInRoom.length > 0) {
+      otherPeersInRoom.forEach(otherId => {
+        const otherPeerId = peerIds[otherId];
+        if (otherPeerId) {
+          // Enviar al nuevo usuario el Peer ID del usuario existente
+          socket.emit("remotePeerId", otherPeerId);
+          // Enviar al usuario existente el Peer ID del nuevo usuario
+          io.to(otherId).emit("remotePeerId", peerId);
+          console.log(`[EXCHANGE] Exchanged Peer IDs between ${peerId.substring(0, 8)}... and ${otherPeerId.substring(0, 8)}...`);
+        }
+      });
+    } else {
+      console.log(`[WAITING] ${peerId.substring(0, 8)}... is waiting for another peer`);
+    }
   });
 
   socket.on("signal", (to, from, data) => {
@@ -81,18 +89,23 @@ io.on("connection", (socket) => {
     
     if (rooms[roomId]) {
       rooms[roomId].delete(socket.id);
-      delete peerIds[socket.id]; // Limpiar Peer ID
+      const disconnectedPeerId = peerIds[socket.id];
+      delete peerIds[socket.id];
       
       // Notificar a los demás usuarios de la sala
       socket.to(roomId).emit("userDisconnected", socket.id);
       
+      // Actualizar conteo de usuarios
+      io.to(roomId).emit("userCount", rooms[roomId].size);
+      
       console.log(
-        `[DISCONNECT] Peer ${socket.id.substring(0, 8)}... left room ${roomId}. Users: ${rooms[roomId].size}/${MAX_PEERS_PER_ROOM}`
+        `[DISCONNECT] Peer ${socket.id.substring(0, 8)}...${disconnectedPeerId ? ` (${disconnectedPeerId.substring(0, 8)}...)` : ''} left room ${roomId}. Users: ${rooms[roomId].size}/${MAX_PEERS_PER_ROOM}`
       );
       
       // Limpiar sala vacía
       if (rooms[roomId].size === 0) {
         delete rooms[roomId];
+        console.log(`[CLEANUP] Room ${roomId} deleted (empty)`);
       }
     }
   });
