@@ -6,36 +6,77 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const socket_io_1 = require("socket.io");
 const peer_1 = require("peer");
 const express_1 = __importDefault(require("express"));
+const cors_1 = __importDefault(require("cors"));
 const http_1 = __importDefault(require("http"));
 require("dotenv/config");
 // ============ CONFIGURATION ============
-const port = Number(process.env.PORT) || 3001;
+const PORT = Number(process.env.PORT) || 3000;
+const PUBLIC_URL = "https://eisc-video-production.up.railway.app";
 const MAX_USERS_PER_ROOM = 2;
 const DEFAULT_ROOM = "main-room";
 // ============ STORAGE ============
 const rooms = new Map();
-// ============ EXPRESS & HTTP SERVER ============
+// ============ EXPRESS APP ============
 const app = (0, express_1.default)();
+// ✅ CORS - Allow all origins (Railway proxy requires this)
+app.use((0, cors_1.default)({
+    origin: "*",
+    methods: ["GET", "POST"],
+    credentials: true
+}));
+app.use(express_1.default.json());
+// Health check endpoint for Railway
+app.get("/", (req, res) => {
+    res.json({
+        status: "online",
+        service: "EISC Video Signaling Server",
+        url: PUBLIC_URL,
+        endpoints: {
+            peerjs: `${PUBLIC_URL}/peerjs`,
+            socketio: PUBLIC_URL,
+            health: `${PUBLIC_URL}/health`
+        },
+        rooms: rooms.size,
+        timestamp: new Date().toISOString()
+    });
+});
+app.get("/health", (req, res) => {
+    res.json({ status: "ok", uptime: process.uptime() });
+});
+// ============ HTTP SERVER ============
 const server = http_1.default.createServer(app);
+// ✅ Fix Railway timeouts - Disable aggressive connection closing
+server.keepAliveTimeout = 0;
+server.headersTimeout = 0;
 // ============ SOCKET.IO SERVER ============
+// ✅ Production-safe Socket.IO configuration for Railway
 const io = new socket_io_1.Server(server, {
     cors: {
-        origin: "*", // Permitir todos los orígenes para desarrollo local
+        origin: "*",
+        methods: ["GET", "POST"],
+        credentials: true
     },
+    transports: ["websocket", "polling"], // WebSocket preferred, polling as fallback
+    pingTimeout: 30000,
+    pingInterval: 25000,
+    allowEIO3: true // Allow Engine.IO v3 clients
 });
 // ============ PEERJS SERVER ============
+// ✅ Mount PeerJS at /peerjs endpoint
 const peerServer = (0, peer_1.ExpressPeerServer)(server, {
     path: "/peerjs",
+    debug: true,
+    allow_discovery: true
 });
 app.use("/peerjs", peerServer);
-// PeerJS Server event listeners
+// PeerJS event listeners with detailed logging
 peerServer.on("connection", (client) => {
     const timestamp = new Date().toISOString();
-    console.log(`\n[${timestamp}] [PEERJS_CONNECT] Client: ${client.getId()}`);
+    console.log(`\n[${timestamp}] [PEERJS_CONNECT] ✅ Client connected: ${client.getId()}`);
 });
 peerServer.on("disconnect", (client) => {
     const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [PEERJS_DISCONNECT] Client: ${client.getId()}`);
+    console.log(`[${timestamp}] [PEERJS_DISCONNECT] ❌ Client disconnected: ${client.getId()}`);
 });
 // ============ UTILITIES ============
 const truncate = (str, len = 8) => str.substring(0, len);
@@ -50,7 +91,9 @@ const log = (type, message, data) => {
 };
 // ============ STATUS MONITORING ============
 setInterval(() => {
-    console.log(`\n[STATUS] Active rooms: ${rooms.size}`);
+    const activeConnections = io.engine.clientsCount;
+    console.log(`\n[STATUS] Active Socket.IO connections: ${activeConnections}`);
+    console.log(`[STATUS] Active rooms: ${rooms.size}`);
     rooms.forEach((room, roomId) => {
         console.log(`  - Room ${roomId}: ${room.users.size}/${MAX_USERS_PER_ROOM} users`);
     });
@@ -236,22 +279,29 @@ const handleMediaToggle = (socket, roomId, data) => {
     socket.to(roomId).emit("mediaToggle", data);
 };
 // ============ SERVER START ============
-server.listen(port);
-console.log("=".repeat(60));
-console.log(`🚀 WebRTC Signaling Server - Hybrid Edition`);
-console.log("=".repeat(60));
-console.log(`📡 HTTP Server: Port ${port}`);
-console.log(`🔌 Socket.IO: Enabled`);
-console.log(`🌐 PeerJS Server: /peerjs endpoint`);
-console.log(`🌐 CORS: Enabled for all origins (dev mode)`);
-console.log(`👥 Max users per room: ${MAX_USERS_PER_ROOM}`);
-console.log(`🏠 Default room: ${DEFAULT_ROOM}`);
-console.log(`⚡ Features: No duplicate remotePeerId, Media toggle, Status monitoring`);
-console.log("=".repeat(60));
-// ============ SOCKET HANDLERS ============
+// ✅ Listen on Railway-provided port, bind to 0.0.0.0
+server.listen(PORT, "0.0.0.0", () => {
+    console.log("=".repeat(70));
+    console.log(`🚀 EISC Video Signaling Server - RAILWAY PRODUCTION`);
+    console.log("=".repeat(70));
+    console.log(`📡 Port: ${PORT}`);
+    console.log(`🌐 Public URL: ${PUBLIC_URL}`);
+    console.log(`🔌 Socket.IO: wss://${PUBLIC_URL.replace('https://', '')}`);
+    console.log(`📹 PeerJS: ${PUBLIC_URL}/peerjs`);
+    console.log(`❤️ Health: ${PUBLIC_URL}/health`);
+    console.log(`🌍 CORS: Enabled for all origins`);
+    console.log(`👥 Max users per room: ${MAX_USERS_PER_ROOM}`);
+    console.log(`⚡ WebSocket transport: Enabled`);
+    console.log(`🔧 Keep-alive timeout: Disabled (Railway optimized)`);
+    console.log(`📊 Status monitoring: Every 30s`);
+    console.log("=".repeat(70));
+    console.log(`✅ Server ready for WebRTC connections!`);
+    console.log("=".repeat(70));
+});
+// ============ SOCKET.IO EVENT HANDLERS ============
 io.on("connection", (socket) => {
     const roomId = DEFAULT_ROOM;
-    log("CONNECT", `New connection`, {
+    log("SOCKET_CONNECT", `New Socket.IO connection`, {
         socketId: truncate(socket.id),
         transport: socket.conn.transport.name,
         clientIP: socket.handshake.address,
@@ -263,29 +313,63 @@ io.on("connection", (socket) => {
     }
     // ============ REGISTER PEER ID ============
     socket.on("registerPeerId", (peerId) => {
+        log("EVENT_REGISTER", `Received registerPeerId event`, {
+            socketId: truncate(socket.id),
+            peerId: truncate(peerId),
+        });
         registerPeerId(socket, roomId, peerId);
     });
     // ============ MEDIA TOGGLE ============
     socket.on("mediaToggle", (data) => {
+        log("EVENT_MEDIA", `Received mediaToggle event`, {
+            socketId: truncate(socket.id),
+            type: data.type,
+            enabled: data.enabled,
+        });
         handleMediaToggle(socket, roomId, data);
     });
     // ============ DISCONNECT ============
-    socket.on("disconnect", () => {
+    socket.on("disconnect", (reason) => {
+        log("SOCKET_DISCONNECT", `Socket.IO disconnected`, {
+            socketId: truncate(socket.id),
+            reason,
+        });
         handleDisconnect(socket, roomId);
     });
 });
-// ============ GRACEFUL SHUTDOWN ============
-process.on("SIGTERM", () => {
-    console.log("\n🛑 SIGTERM received, closing server...");
-    server.close(() => {
-        console.log("✅ Server closed");
-        process.exit(0);
-    });
+// ============ ERROR HANDLING ============
+io.engine.on("connection_error", (err) => {
+    console.error(`[CONNECTION_ERROR] ${err.message}`);
+    console.error(`  Code: ${err.code}`);
+    console.error(`  Context: ${err.context}`);
 });
-process.on("SIGINT", () => {
-    console.log("\n🛑 SIGINT received, closing server...");
+// ============ GRACEFUL SHUTDOWN ============
+const shutdown = (signal) => {
+    console.log(`\n🛑 ${signal} received, gracefully shutting down...`);
+    // Close all Socket.IO connections
+    io.close(() => {
+        console.log("✅ Socket.IO closed");
+    });
+    // Close HTTP server
     server.close(() => {
-        console.log("✅ Server closed");
+        console.log("✅ HTTP Server closed");
+        console.log("👋 Server shutdown complete");
         process.exit(0);
     });
+    // Force close after 10 seconds
+    setTimeout(() => {
+        console.error("⚠️ Forced shutdown after timeout");
+        process.exit(1);
+    }, 10000);
+};
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+// Handle uncaught errors
+process.on("uncaughtException", (error) => {
+    console.error("❌ UNCAUGHT EXCEPTION:", error);
+    shutdown("UNCAUGHT_EXCEPTION");
+});
+process.on("unhandledRejection", (reason) => {
+    console.error("❌ UNHANDLED REJECTION:", reason);
+    shutdown("UNHANDLED_REJECTION");
 });
