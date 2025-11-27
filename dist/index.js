@@ -1,6 +1,12 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const socket_io_1 = require("socket.io");
+const peer_1 = require("peer");
+const express_1 = __importDefault(require("express"));
+const http_1 = __importDefault(require("http"));
 require("dotenv/config");
 // ============ CONFIGURATION ============
 const port = Number(process.env.PORT) || 3001;
@@ -8,6 +14,29 @@ const MAX_USERS_PER_ROOM = 2;
 const DEFAULT_ROOM = "main-room";
 // ============ STORAGE ============
 const rooms = new Map();
+// ============ EXPRESS & HTTP SERVER ============
+const app = (0, express_1.default)();
+const server = http_1.default.createServer(app);
+// ============ SOCKET.IO SERVER ============
+const io = new socket_io_1.Server(server, {
+    cors: {
+        origin: "*", // Permitir todos los orígenes para desarrollo local
+    },
+});
+// ============ PEERJS SERVER ============
+const peerServer = (0, peer_1.ExpressPeerServer)(server, {
+    path: "/peerjs",
+});
+app.use("/peerjs", peerServer);
+// PeerJS Server event listeners
+peerServer.on("connection", (client) => {
+    const timestamp = new Date().toISOString();
+    console.log(`\n[${timestamp}] [PEERJS_CONNECT] Client: ${client.getId()}`);
+});
+peerServer.on("disconnect", (client) => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [PEERJS_DISCONNECT] Client: ${client.getId()}`);
+});
 // ============ UTILITIES ============
 const truncate = (str, len = 8) => str.substring(0, len);
 const log = (type, message, data) => {
@@ -19,6 +48,15 @@ const log = (type, message, data) => {
         });
     }
 };
+// ============ STATUS MONITORING ============
+setInterval(() => {
+    console.log(`\n[STATUS] Active rooms: ${rooms.size}`);
+    rooms.forEach((room, roomId) => {
+        console.log(`  - Room ${roomId}: ${room.users.size}/${MAX_USERS_PER_ROOM} users`);
+    });
+    const totalPeerIds = Array.from(rooms.values()).reduce((sum, room) => sum + room.peerIds.size, 0);
+    console.log(`[STATUS] Total peer IDs registered: ${totalPeerIds}`);
+}, 30000);
 // ============ ROOM MANAGEMENT ============
 const getOrCreateRoom = (roomId) => {
     if (!rooms.has(roomId)) {
@@ -197,21 +235,18 @@ const handleMediaToggle = (socket, roomId, data) => {
     // Reenviar a otros usuarios en la sala
     socket.to(roomId).emit("mediaToggle", data);
 };
-// ============ SERVER INITIALIZATION ============
-const io = new socket_io_1.Server({
-    cors: {
-        origin: "*", // TODO: En producción, especificar dominios permitidos
-    },
-});
-io.listen(port);
+// ============ SERVER START ============
+server.listen(port);
 console.log("=".repeat(60));
-console.log(`🚀 WebRTC Signaling Server`);
+console.log(`🚀 WebRTC Signaling Server - Hybrid Edition`);
 console.log("=".repeat(60));
-console.log(`📡 Port: ${port}`);
+console.log(`📡 HTTP Server: Port ${port}`);
+console.log(`🔌 Socket.IO: Enabled`);
+console.log(`🌐 PeerJS Server: /peerjs endpoint`);
 console.log(`🌐 CORS: Enabled for all origins (dev mode)`);
 console.log(`👥 Max users per room: ${MAX_USERS_PER_ROOM}`);
 console.log(`🏠 Default room: ${DEFAULT_ROOM}`);
-console.log(`⚡ PeerJS compatible (no ICE/SDP signaling)`);
+console.log(`⚡ Features: No duplicate remotePeerId, Media toggle, Status monitoring`);
 console.log("=".repeat(60));
 // ============ SOCKET HANDLERS ============
 io.on("connection", (socket) => {
@@ -219,6 +254,7 @@ io.on("connection", (socket) => {
     log("CONNECT", `New connection`, {
         socketId: truncate(socket.id),
         transport: socket.conn.transport.name,
+        clientIP: socket.handshake.address,
     });
     // Intentar unirse a la sala
     const joined = joinRoom(socket, roomId);
@@ -241,14 +277,14 @@ io.on("connection", (socket) => {
 // ============ GRACEFUL SHUTDOWN ============
 process.on("SIGTERM", () => {
     console.log("\n🛑 SIGTERM received, closing server...");
-    io.close(() => {
+    server.close(() => {
         console.log("✅ Server closed");
         process.exit(0);
     });
 });
 process.on("SIGINT", () => {
     console.log("\n🛑 SIGINT received, closing server...");
-    io.close(() => {
+    server.close(() => {
         console.log("✅ Server closed");
         process.exit(0);
     });
