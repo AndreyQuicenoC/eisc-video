@@ -128,7 +128,7 @@ app.use(express.json());
 // CRITICAL: When using app.use("/peerjs", ...), the path parameter must be "/"
 const peerServer = ExpressPeerServer(server, {
   path: "/",
-  debug: true,
+  debug: false, // FIX HEROKU: Disable debug spam in production
   
   // FIX HEROKU: Enable proxied mode (Heroku router is a reverse proxy)
   proxied: true,
